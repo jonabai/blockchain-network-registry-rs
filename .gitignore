@@ -45,6 +45,8 @@ logs/
 /coverage/
 /tarpaulin-report.html
 /lcov.info
+*DS.md
+*DE.md
 
 # SQLx offline mode
 /.sqlx/
