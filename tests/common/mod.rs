@@ -50,7 +50,7 @@ impl TestApp {
             .with_tag("16-alpine")
             .start()
             .await
-            .expect("Failed to start PostgreSQL container");
+            .expect("Failed to start PostgresSQL container");
 
         let host = container.get_host().await.expect("Failed to get host");
         let port = container
@@ -63,7 +63,7 @@ impl TestApp {
             host, port
         );
 
-        // Create connection pool
+        // Create a connection pool
         let pool = PgPoolOptions::new()
             .max_connections(5)
             .min_connections(1)
@@ -92,7 +92,7 @@ impl TestApp {
         let test_config = create_test_config();
         let config = Arc::new(test_config);
 
-        // Create application state
+        // Create an application state
         let app_state = AppState {
             config: config.clone(),
             create_network_use_case,
@@ -131,7 +131,7 @@ impl TestApp {
 
 /// Create a test configuration
 fn create_test_config() -> blockchain_network_registry::infrastructure::driven_adapters::config::AppConfig {
-    // We need to deserialize from a config source since AppConfig uses SecretString
+    // We need to deserialize from a config source since AppConfig uses SecretString,
     // which requires deserialization. We'll use the config crate with test values.
     use config::{Config, File, FileFormat};
 
