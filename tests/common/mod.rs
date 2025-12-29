@@ -10,7 +10,6 @@ use chrono::Utc;
 use jsonwebtoken::{encode, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
 use testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use tower_http::trace::TraceLayer;
@@ -39,7 +38,6 @@ pub struct TestClaims {
 /// Test application context
 pub struct TestApp {
     pub router: Router,
-    pub pool: PgPool,
     pub jwt_token: String,
     _container: ContainerAsync<Postgres>,
 }
@@ -120,7 +118,6 @@ impl TestApp {
 
         Self {
             router,
-            pool,
             jwt_token,
             _container: container,
         }
@@ -129,14 +126,6 @@ impl TestApp {
     /// Get the authorization header value for requests
     pub fn auth_header(&self) -> String {
         format!("Bearer {}", self.jwt_token)
-    }
-
-    /// Clear all data from the database (useful between tests)
-    pub async fn clear_database(&self) {
-        sqlx::query("TRUNCATE TABLE networks CASCADE")
-            .execute(&self.pool)
-            .await
-            .expect("Failed to truncate networks table");
     }
 }
 
