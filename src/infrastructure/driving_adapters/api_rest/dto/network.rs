@@ -13,7 +13,7 @@ use crate::domain::models::network::{CreateNetworkData, Network, UpdateNetworkDa
 
 lazy_static! {
     /// Regex for validating Ethereum addresses
-    static ref ETHEREUM_ADDRESS_REGEX: Regex = Regex::new(r"^0x[a-fA-F0-9]{40}$").unwrap();
+    static ref ETHEREUM_ADDRESS_REGEX: Regex = Regex::new(r"^0x[a-fA-F0-9]{40}$").expect("valid regex");
 }
 
 /// Validates an Ethereum address format
@@ -27,25 +27,30 @@ fn validate_ethereum_address(address: &str) -> Result<(), validator::ValidationE
     }
 }
 
-/// Validates a URL format
+/// Validates a URL format (must start with http:// or https://)
 fn validate_url(url: &str) -> Result<(), validator::ValidationError> {
-    if url.starts_with("http://") || url.starts_with("https://") {
-        Ok(())
-    } else {
+    // Check protocol
+    if !url.starts_with("http://") && !url.starts_with("https://") {
         let mut error = validator::ValidationError::new("url");
         error.message = Some("URL must start with http:// or https://".into());
-        Err(error)
+        return Err(error);
     }
+
+    // Check URL has a host (not just protocol)
+    let without_protocol = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or("");
+    if without_protocol.is_empty() || without_protocol.starts_with('/') {
+        let mut error = validator::ValidationError::new("url");
+        error.message = Some("URL must include a valid host".into());
+        return Err(error);
+    }
+
+    Ok(())
 }
 
 /// Validates URL list
 fn validate_url_list(urls: &[String]) -> Result<(), validator::ValidationError> {
     for url in urls {
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            let mut error = validator::ValidationError::new("url");
-            error.message = Some("Each URL must start with http:// or https://".into());
-            return Err(error);
-        }
+        validate_url(url)?;
         if url.len() > 500 {
             let mut error = validator::ValidationError::new("url_length");
             error.message = Some("Each URL must be at most 500 characters".into());
@@ -53,6 +58,27 @@ fn validate_url_list(urls: &[String]) -> Result<(), validator::ValidationError> 
         }
     }
     Ok(())
+}
+
+/// Validates that an f64 can be safely converted to Decimal
+fn validate_decimal(value: f64) -> Result<(), validator::ValidationError> {
+    if !value.is_finite() {
+        let mut error = validator::ValidationError::new("decimal");
+        error.message = Some("Value must be a finite number".into());
+        return Err(error);
+    }
+    if Decimal::try_from(value).is_err() {
+        let mut error = validator::ValidationError::new("decimal");
+        error.message = Some("Value cannot be represented as a decimal".into());
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Safely converts f64 to Decimal, panics if validation wasn't performed
+/// This should only be called after validate() has succeeded
+fn f64_to_decimal(value: f64) -> Decimal {
+    Decimal::try_from(value).expect("value should have been validated")
 }
 
 /// DTO for creating a new network
@@ -81,9 +107,11 @@ pub struct CreateNetworkDto {
     pub block_explorer_url: String,
 
     #[validate(range(min = 0.0, message = "fee_multiplier must be at least 0"))]
+    #[validate(custom(function = "validate_decimal"))]
     pub fee_multiplier: f64,
 
     #[validate(range(min = 0.0, message = "gas_limit_multiplier must be at least 0"))]
+    #[validate(custom(function = "validate_decimal"))]
     pub gas_limit_multiplier: f64,
 
     #[validate(custom(function = "validate_ethereum_address"))]
@@ -99,8 +127,8 @@ impl From<CreateNetworkDto> for CreateNetworkData {
             other_rpc_urls: dto.other_rpc_urls,
             test_net: dto.test_net,
             block_explorer_url: dto.block_explorer_url,
-            fee_multiplier: Decimal::try_from(dto.fee_multiplier).unwrap_or_default(),
-            gas_limit_multiplier: Decimal::try_from(dto.gas_limit_multiplier).unwrap_or_default(),
+            fee_multiplier: f64_to_decimal(dto.fee_multiplier),
+            gas_limit_multiplier: f64_to_decimal(dto.gas_limit_multiplier),
             default_signer_address: dto.default_signer_address,
         }
     }
@@ -132,9 +160,11 @@ pub struct UpdateNetworkDto {
     pub block_explorer_url: String,
 
     #[validate(range(min = 0.0, message = "fee_multiplier must be at least 0"))]
+    #[validate(custom(function = "validate_decimal"))]
     pub fee_multiplier: f64,
 
     #[validate(range(min = 0.0, message = "gas_limit_multiplier must be at least 0"))]
+    #[validate(custom(function = "validate_decimal"))]
     pub gas_limit_multiplier: f64,
 
     #[validate(custom(function = "validate_ethereum_address"))]
@@ -150,8 +180,8 @@ impl From<UpdateNetworkDto> for UpdateNetworkData {
             other_rpc_urls: Some(dto.other_rpc_urls),
             test_net: Some(dto.test_net),
             block_explorer_url: Some(dto.block_explorer_url),
-            fee_multiplier: Some(Decimal::try_from(dto.fee_multiplier).unwrap_or_default()),
-            gas_limit_multiplier: Some(Decimal::try_from(dto.gas_limit_multiplier).unwrap_or_default()),
+            fee_multiplier: Some(f64_to_decimal(dto.fee_multiplier)),
+            gas_limit_multiplier: Some(f64_to_decimal(dto.gas_limit_multiplier)),
             default_signer_address: Some(dto.default_signer_address),
             active: None, // Cannot update active via PUT
         }
@@ -159,6 +189,9 @@ impl From<UpdateNetworkDto> for UpdateNetworkData {
 }
 
 /// DTO for partial network update (PATCH)
+///
+/// All fields are optional. Only provided fields will be updated.
+/// Each field is validated if present (validator crate skips None values).
 #[derive(Debug, Clone, Deserialize, Validate, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchNetworkDto {
@@ -169,22 +202,28 @@ pub struct PatchNetworkDto {
     pub name: Option<String>,
 
     #[validate(length(max = 500, message = "rpc_url must be at most 500 characters"))]
+    #[validate(custom(function = "validate_url"))]
     pub rpc_url: Option<String>,
 
     #[validate(length(max = 10, message = "other_rpc_urls can have at most 10 items"))]
+    #[validate(custom(function = "validate_url_list"))]
     pub other_rpc_urls: Option<Vec<String>>,
 
     pub test_net: Option<bool>,
 
     #[validate(length(max = 500, message = "block_explorer_url must be at most 500 characters"))]
+    #[validate(custom(function = "validate_url"))]
     pub block_explorer_url: Option<String>,
 
     #[validate(range(min = 0.0, message = "fee_multiplier must be at least 0"))]
+    #[validate(custom(function = "validate_decimal"))]
     pub fee_multiplier: Option<f64>,
 
     #[validate(range(min = 0.0, message = "gas_limit_multiplier must be at least 0"))]
+    #[validate(custom(function = "validate_decimal"))]
     pub gas_limit_multiplier: Option<f64>,
 
+    #[validate(custom(function = "validate_ethereum_address"))]
     pub default_signer_address: Option<String>,
 
     pub active: Option<bool>,
@@ -199,8 +238,8 @@ impl From<PatchNetworkDto> for UpdateNetworkData {
             other_rpc_urls: dto.other_rpc_urls,
             test_net: dto.test_net,
             block_explorer_url: dto.block_explorer_url,
-            fee_multiplier: dto.fee_multiplier.map(|v| Decimal::try_from(v).unwrap_or_default()),
-            gas_limit_multiplier: dto.gas_limit_multiplier.map(|v| Decimal::try_from(v).unwrap_or_default()),
+            fee_multiplier: dto.fee_multiplier.map(f64_to_decimal),
+            gas_limit_multiplier: dto.gas_limit_multiplier.map(f64_to_decimal),
             default_signer_address: dto.default_signer_address,
             active: dto.active,
         }
@@ -287,11 +326,85 @@ mod tests {
     fn test_validate_url_valid() {
         assert!(validate_url("https://example.com").is_ok());
         assert!(validate_url("http://localhost:8080").is_ok());
+        assert!(validate_url("https://api.example.com/v1").is_ok());
     }
 
     #[test]
     fn test_validate_url_invalid() {
         assert!(validate_url("ftp://example.com").is_err());
         assert!(validate_url("example.com").is_err());
+        // URL with no host
+        assert!(validate_url("http://").is_err());
+        assert!(validate_url("https://").is_err());
+    }
+
+    #[test]
+    fn test_validate_decimal_valid() {
+        assert!(validate_decimal(1.0).is_ok());
+        assert!(validate_decimal(0.0).is_ok());
+        assert!(validate_decimal(999999.99).is_ok());
+    }
+
+    #[test]
+    fn test_validate_decimal_invalid() {
+        assert!(validate_decimal(f64::INFINITY).is_err());
+        assert!(validate_decimal(f64::NEG_INFINITY).is_err());
+        assert!(validate_decimal(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn test_validate_url_list() {
+        assert!(validate_url_list(&[]).is_ok());
+        assert!(validate_url_list(&["https://a.com".to_string(), "http://b.com".to_string()]).is_ok());
+        assert!(validate_url_list(&["invalid".to_string()]).is_err());
+    }
+
+    #[test]
+    fn test_patch_dto_validation() {
+        // Empty DTO should be valid
+        let empty_dto = PatchNetworkDto::default();
+        assert!(empty_dto.validate().is_ok());
+
+        // Valid URL should pass
+        let dto_with_url = PatchNetworkDto {
+            rpc_url: Some("https://example.com".to_string()),
+            ..Default::default()
+        };
+        assert!(dto_with_url.validate().is_ok());
+
+        // Invalid URL should fail
+        let dto_with_invalid_url = PatchNetworkDto {
+            rpc_url: Some("invalid-url".to_string()),
+            ..Default::default()
+        };
+        assert!(dto_with_invalid_url.validate().is_err());
+
+        // Valid Ethereum address should pass
+        let dto_with_address = PatchNetworkDto {
+            default_signer_address: Some("0x742d35Cc6634C0532925a3b844Bc9e7595f1dEaD".to_string()),
+            ..Default::default()
+        };
+        assert!(dto_with_address.validate().is_ok());
+
+        // Invalid Ethereum address should fail
+        let dto_with_invalid_address = PatchNetworkDto {
+            default_signer_address: Some("invalid".to_string()),
+            ..Default::default()
+        };
+        assert!(dto_with_invalid_address.validate().is_err());
+
+        // Valid decimal should pass
+        let dto_with_decimal = PatchNetworkDto {
+            fee_multiplier: Some(1.5),
+            ..Default::default()
+        };
+        assert!(dto_with_decimal.validate().is_ok());
+
+        // Infinity should fail
+        let dto_with_infinity = PatchNetworkDto {
+            fee_multiplier: Some(f64::INFINITY),
+            ..Default::default()
+        };
+        assert!(dto_with_infinity.validate().is_err());
     }
 }
