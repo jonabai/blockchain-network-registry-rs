@@ -1,0 +1,12 @@
+[server]
+host = "127.0.0.1"
+port = 3001
+
+[database]
+url = "postgres://network_registry_test:network_registry_test@localhost:5433/network_registry_test"
+max_connections = 5
+min_connections = 1
+
+[jwt]
+secret = "test-jwt-secret-key-for-testing-only"
+expires_in_secs = 3600

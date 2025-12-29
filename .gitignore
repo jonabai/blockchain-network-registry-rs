@@ -1,33 +1,22 @@
-# compiled output
-/dist
-/node_modules
+# Rust compiled output
+/target/
+**/*.rs.bk
+*.pdb
 
-# Logs
-logs
-*.log
-npm-debug.log*
-pnpm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-lerna-debug.log*
+# Cargo lock (optional - keep if building a binary, ignore if library)
+# Cargo.lock
 
 # OS
 .DS_Store
-
-# Tests
-/coverage
-/.nyc_output
+Thumbs.db
 
 # IDEs and editors
-/.idea
+/.idea/
 .project
 .classpath
-.c9/
 *.launch
 .settings/
 *.sublime-workspace
-CLAUDE.md
-BACKEND_CODING_STANDARDS.md
 
 # IDE - VSCode
 .vscode/*
@@ -41,9 +30,22 @@ BACKEND_CODING_STANDARDS.md
 .env.local
 .env.*.local
 
-# Database
+# Local configuration
+/config/local.toml
+
+# Logs
+logs/
+*.log
+
+# Database files
 *.sqlite
 *.sqlite3
-/config/local.json
 
-.npmrc
+# Coverage reports
+/coverage/
+/tarpaulin-report.html
+/lcov.info
+
+# SQLx offline mode
+/.sqlx/
+sqlx-data.json
