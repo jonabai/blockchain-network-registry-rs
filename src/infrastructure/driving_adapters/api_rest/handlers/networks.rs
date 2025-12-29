@@ -28,10 +28,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(create_network))
         .route("/", get(get_active_networks))
-        .route("/{id}", get(get_network_by_id))
-        .route("/{id}", put(update_network))
-        .route("/{id}", patch(partial_update_network))
-        .route("/{id}", delete(delete_network))
+        .route("/:id", get(get_network_by_id))
+        .route("/:id", put(update_network))
+        .route("/:id", patch(partial_update_network))
+        .route("/:id", delete(delete_network))
 }
 
 /// POST /networks - Create a new network
