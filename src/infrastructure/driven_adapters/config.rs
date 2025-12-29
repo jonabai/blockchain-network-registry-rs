@@ -1,9 +1,15 @@
 //! Application Configuration
 //!
 //! Loads configuration from files and environment variables.
+//!
+//! Security considerations:
+//! - JWT secrets are wrapped in `SecretString` which zeros memory on drop
+//! - Sensitive config fields are not cloneable to prevent accidental exposure
 
 use config::{Config, ConfigError, Environment, File};
 use serde::Deserialize;
+use std::fmt;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Server configuration
 #[derive(Debug, Clone, Deserialize)]
@@ -23,10 +29,50 @@ pub struct DatabaseConfig {
     pub min_connections: u32,
 }
 
-/// JWT configuration
-#[derive(Debug, Clone, Deserialize)]
+/// A string that zeros its memory when dropped.
+/// Does not implement Clone to prevent accidental copying of secrets.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct SecretString(String);
+
+impl SecretString {
+    /// Expose the secret value (use sparingly)
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    /// Get the length of the secret
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Check if the secret is empty
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[REDACTED]")
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(SecretString)
+    }
+}
+
+/// JWT configuration (not Clone to prevent secret exposure)
+#[derive(Debug, Deserialize)]
 pub struct JwtConfig {
-    pub secret: String,
+    pub secret: SecretString,
     pub expires_in_secs: i64,
 }
 
@@ -48,8 +94,8 @@ impl Default for RateLimitConfig {
     }
 }
 
-/// Application configuration
-#[derive(Debug, Clone, Deserialize)]
+/// Application configuration (not Clone due to sensitive JWT config)
+#[derive(Debug, Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
@@ -83,7 +129,7 @@ impl AppConfig {
             .build()?
             .try_deserialize()?;
 
-        // Validate JWT secret
+        // Validate JWT secret (using SecretString methods to avoid exposing the value)
         if config.jwt.secret.is_empty() {
             return Err(ConfigError::Message(
                 "JWT secret is required. Set APP__JWT__SECRET environment variable".to_string(),

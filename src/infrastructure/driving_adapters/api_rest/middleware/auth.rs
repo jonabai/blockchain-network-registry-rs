@@ -124,7 +124,7 @@ where
 
             let token_data = decode::<Claims>(
                 token,
-                &DecodingKey::from_secret(config.jwt.secret.as_bytes()),
+                &DecodingKey::from_secret(config.jwt.secret.expose().as_bytes()),
                 &validation,
             )
             .map_err(|_| AuthError {

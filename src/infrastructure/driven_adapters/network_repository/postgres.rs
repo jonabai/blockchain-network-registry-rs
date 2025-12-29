@@ -152,7 +152,8 @@ impl NetworkRepository for PostgresNetworkRepository {
         .bind(network.created_at())
         .bind(network.updated_at())
         .fetch_one(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| RepositoryError::from(e).into_domain_error())?;
 
         Network::try_from(row)
     }
@@ -194,7 +195,8 @@ impl NetworkRepository for PostgresNetworkRepository {
         .bind(network.default_signer_address())
         .bind(network.updated_at())
         .fetch_optional(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| RepositoryError::from(e).into_domain_error())?;
 
         row.map(Network::try_from).transpose()
     }

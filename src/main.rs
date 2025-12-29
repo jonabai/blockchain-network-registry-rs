@@ -2,6 +2,7 @@
 
 use std::{net::SocketAddr, sync::Arc};
 
+use anyhow::Context;
 use axum::{middleware, Router};
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
@@ -18,7 +19,11 @@ use blockchain_network_registry::infrastructure::driven_adapters::config::AppCon
 use blockchain_network_registry::infrastructure::driven_adapters::network_repository::PostgresNetworkRepository;
 use blockchain_network_registry::infrastructure::driving_adapters::api_rest::handlers::networks;
 use blockchain_network_registry::infrastructure::driving_adapters::api_rest::middleware::auth::add_config_extension;
+use blockchain_network_registry::infrastructure::driving_adapters::api_rest::middleware::request_id::request_id_middleware;
 use blockchain_network_registry::infrastructure::driving_adapters::api_rest::AppState;
+
+/// Default CORS origin for development (when no origins configured)
+const DEFAULT_CORS_ORIGIN: &str = "http://localhost:3000";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -31,8 +36,8 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Load configuration
-    let config = AppConfig::load()?;
+    // Load configuration and wrap in Arc immediately (config is not Clone)
+    let config = Arc::new(AppConfig::load()?);
     tracing::info!("Configuration loaded successfully");
 
     // Create database connection pool
@@ -60,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Create application state
     let app_state = AppState {
-        config: Arc::new(config.clone()),
+        config: config.clone(),
         create_network_use_case,
         get_network_by_id_use_case,
         get_active_networks_use_case,
@@ -69,12 +74,12 @@ async fn main() -> anyhow::Result<()> {
         delete_network_use_case,
     };
 
-    // Configure rate limiting
+    // Configure rate limiting with proper error handling
     let governor_conf = GovernorConfigBuilder::default()
         .per_second(config.rate_limit.requests_per_second.into())
         .burst_size(config.rate_limit.burst_size)
         .finish()
-        .expect("Failed to build rate limiter config");
+        .context("Failed to build rate limiter configuration")?;
 
     let rate_limit_layer = GovernorLayer {
         config: Arc::new(governor_conf),
@@ -86,32 +91,14 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Build router with secure CORS configuration
-    let cors = if config.server.allowed_origins.is_empty() {
-        // Development: restrictive default (localhost only)
-        tracing::warn!("No allowed_origins configured, defaulting to localhost only");
-        CorsLayer::new()
-            .allow_origin("http://localhost:3000".parse::<axum::http::HeaderValue>().expect("valid origin"))
-            .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::PUT, axum::http::Method::PATCH, axum::http::Method::DELETE])
-            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
-            .allow_credentials(true)
-    } else {
-        let origins: Vec<axum::http::HeaderValue> = config
-            .server
-            .allowed_origins
-            .iter()
-            .filter_map(|o| o.parse().ok())
-            .collect();
-        CorsLayer::new()
-            .allow_origin(origins)
-            .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::PUT, axum::http::Method::PATCH, axum::http::Method::DELETE])
-            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
-            .allow_credentials(true)
-    };
+    let cors = build_cors_layer(&config)?;
 
     let app = Router::new()
         .nest("/networks", networks::router())
         // Add config to request extensions for JWT validation
         .layer(middleware::from_fn_with_state(app_state.clone(), add_config_extension))
+        // Add request ID for tracing and debugging
+        .layer(middleware::from_fn(request_id_middleware))
         .layer(rate_limit_layer)
         .layer(TraceLayer::new_for_http())
         .layer(cors)
@@ -129,4 +116,51 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     Ok(())
+}
+
+/// Build CORS layer with proper error handling
+fn build_cors_layer(config: &AppConfig) -> anyhow::Result<CorsLayer> {
+    let cors = if config.server.allowed_origins.is_empty() {
+        // Development: restrictive default (localhost only)
+        tracing::warn!("No allowed_origins configured, defaulting to localhost only");
+        let origin = DEFAULT_CORS_ORIGIN
+            .parse::<axum::http::HeaderValue>()
+            .context("Failed to parse default CORS origin")?;
+        CorsLayer::new()
+            .allow_origin(origin)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::PATCH,
+                axum::http::Method::DELETE,
+            ])
+            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
+            .allow_credentials(true)
+    } else {
+        let origins: Vec<axum::http::HeaderValue> = config
+            .server
+            .allowed_origins
+            .iter()
+            .filter_map(|o| o.parse().ok())
+            .collect();
+
+        if origins.is_empty() {
+            anyhow::bail!("No valid CORS origins could be parsed from configuration");
+        }
+
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::PATCH,
+                axum::http::Method::DELETE,
+            ])
+            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
+            .allow_credentials(true)
+    };
+
+    Ok(cors)
 }

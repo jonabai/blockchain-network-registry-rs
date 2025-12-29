@@ -6,6 +6,17 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
+use crate::shared::errors::DomainError;
+
+/// Maximum length for network name
+pub const MAX_NAME_LENGTH: usize = 100;
+/// Maximum length for RPC URL
+pub const MAX_URL_LENGTH: usize = 500;
+/// Maximum number of other RPC URLs
+pub const MAX_OTHER_RPC_URLS: usize = 10;
+/// Ethereum address length (0x + 40 hex chars)
+pub const ETHEREUM_ADDRESS_LENGTH: usize = 42;
+
 /// Newtype wrapper for Network ID providing type safety
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NetworkId(Uuid);
@@ -84,6 +95,73 @@ pub struct CreateNetworkData {
     pub default_signer_address: String,
 }
 
+impl CreateNetworkData {
+    /// Validate all fields in the creation data
+    ///
+    /// # Errors
+    ///
+    /// Returns a `DomainError::ValidationError` if any field is invalid
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if self.chain_id < 1 {
+            return Err(DomainError::ValidationError("chain_id must be at least 1".to_string()));
+        }
+
+        if self.name.is_empty() || self.name.len() > MAX_NAME_LENGTH {
+            return Err(DomainError::ValidationError(format!(
+                "name must be between 1 and {} characters",
+                MAX_NAME_LENGTH
+            )));
+        }
+
+        if self.rpc_url.len() > MAX_URL_LENGTH {
+            return Err(DomainError::ValidationError(format!(
+                "rpc_url must be at most {} characters",
+                MAX_URL_LENGTH
+            )));
+        }
+
+        if self.other_rpc_urls.len() > MAX_OTHER_RPC_URLS {
+            return Err(DomainError::ValidationError(format!(
+                "other_rpc_urls can have at most {} items",
+                MAX_OTHER_RPC_URLS
+            )));
+        }
+
+        for url in &self.other_rpc_urls {
+            if url.len() > MAX_URL_LENGTH {
+                return Err(DomainError::ValidationError(format!(
+                    "each URL in other_rpc_urls must be at most {} characters",
+                    MAX_URL_LENGTH
+                )));
+            }
+        }
+
+        if self.block_explorer_url.len() > MAX_URL_LENGTH {
+            return Err(DomainError::ValidationError(format!(
+                "block_explorer_url must be at most {} characters",
+                MAX_URL_LENGTH
+            )));
+        }
+
+        if self.fee_multiplier < Decimal::ZERO {
+            return Err(DomainError::ValidationError("fee_multiplier must be at least 0".to_string()));
+        }
+
+        if self.gas_limit_multiplier < Decimal::ZERO {
+            return Err(DomainError::ValidationError("gas_limit_multiplier must be at least 0".to_string()));
+        }
+
+        if self.default_signer_address.len() != ETHEREUM_ADDRESS_LENGTH {
+            return Err(DomainError::ValidationError(format!(
+                "default_signer_address must be {} characters",
+                ETHEREUM_ADDRESS_LENGTH
+            )));
+        }
+
+        Ok(())
+    }
+}
+
 /// Data for updating an existing Network (all fields optional for partial updates)
 #[derive(Debug, Clone, Default)]
 pub struct UpdateNetworkData {
@@ -119,10 +197,16 @@ pub struct Network {
 
 impl Network {
     /// Create a new Network from creation data
-    #[must_use]
-    pub fn new(data: CreateNetworkData) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns a `DomainError::ValidationError` if the data is invalid
+    pub fn new(data: CreateNetworkData) -> Result<Self, DomainError> {
+        // Validate data at the domain level
+        data.validate()?;
+
         let now = Utc::now();
-        Self {
+        Ok(Self {
             id: NetworkId::new(),
             chain_id: data.chain_id,
             name: data.name,
@@ -136,7 +220,7 @@ impl Network {
             default_signer_address: data.default_signer_address,
             created_at: now,
             updated_at: now,
-        }
+        })
     }
 
     /// Restore a Network from persisted data
@@ -315,7 +399,7 @@ mod tests {
     #[test]
     fn test_network_new() {
         let data = create_test_network_data();
-        let network = Network::new(data.clone());
+        let network = Network::new(data.clone()).expect("valid data should create network");
 
         assert_eq!(network.chain_id(), data.chain_id);
         assert_eq!(network.name(), data.name);
@@ -330,9 +414,41 @@ mod tests {
     }
 
     #[test]
+    fn test_network_new_validates_chain_id() {
+        let mut data = create_test_network_data();
+        data.chain_id = 0;
+        let result = Network::new(data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_network_new_validates_name_length() {
+        let mut data = create_test_network_data();
+        data.name = "x".repeat(MAX_NAME_LENGTH + 1);
+        let result = Network::new(data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_network_new_validates_empty_name() {
+        let mut data = create_test_network_data();
+        data.name = String::new();
+        let result = Network::new(data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_network_new_validates_signer_address_length() {
+        let mut data = create_test_network_data();
+        data.default_signer_address = "0x123".to_string(); // too short
+        let result = Network::new(data);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_network_with_updates() {
         let data = create_test_network_data();
-        let network = Network::new(data);
+        let network = Network::new(data).expect("valid data");
 
         let updates = UpdateNetworkData {
             name: Some("Updated Network".to_string()),
@@ -348,7 +464,7 @@ mod tests {
     #[test]
     fn test_network_deactivate() {
         let data = create_test_network_data();
-        let network = Network::new(data);
+        let network = Network::new(data).expect("valid data");
         assert!(network.active());
 
         let deactivated = network.deactivate();

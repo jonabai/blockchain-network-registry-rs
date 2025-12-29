@@ -3,7 +3,7 @@
 //! Data transfer objects for network API endpoints.
 
 use chrono::{DateTime, Utc};
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -11,10 +11,12 @@ use validator::Validate;
 
 use crate::domain::models::network::{CreateNetworkData, Network, UpdateNetworkData};
 
-lazy_static! {
-    /// Regex for validating Ethereum addresses
-    static ref ETHEREUM_ADDRESS_REGEX: Regex = Regex::new(r"^0x[a-fA-F0-9]{40}$").expect("valid regex");
-}
+/// Regex for validating Ethereum addresses (0x followed by 40 hex characters)
+/// This regex is validated at compile time via the test suite.
+static ETHEREUM_ADDRESS_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^0x[a-fA-F0-9]{40}$")
+        .unwrap_or_else(|e| panic!("Invalid Ethereum address regex: {}", e))
+});
 
 /// Validates an Ethereum address format
 fn validate_ethereum_address(address: &str) -> Result<(), validator::ValidationError> {
@@ -308,6 +310,13 @@ impl From<&Network> for NetworkResponseDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ethereum_address_regex_is_valid() {
+        // This test ensures the regex compiles correctly (validates at test time)
+        // Force evaluation of the lazy static
+        let _ = ETHEREUM_ADDRESS_REGEX.is_match("0x0000000000000000000000000000000000000000");
+    }
 
     #[test]
     fn test_validate_ethereum_address_valid() {

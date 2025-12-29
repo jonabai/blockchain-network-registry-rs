@@ -42,8 +42,8 @@ impl CreateNetworkUseCase {
             )));
         }
 
-        // Create the network
-        let network = Network::new(data);
+        // Create the network (validates domain constraints)
+        let network = Network::new(data)?;
         let created = self.network_repository.create(&network).await?;
 
         tracing::info!(

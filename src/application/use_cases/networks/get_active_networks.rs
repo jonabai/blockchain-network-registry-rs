@@ -112,6 +112,7 @@ mod tests {
             gas_limit_multiplier: dec!(1.2),
             default_signer_address: "0x742d35Cc6634C0532925a3b844Bc9e7595f1dEaD".to_string(),
         })
+        .expect("valid test data")
     }
 
     #[tokio::test]

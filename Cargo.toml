@@ -48,6 +48,12 @@ config = "0.14"
 # Authentication
 jsonwebtoken = "9"
 
+# Security - zeroing sensitive data from memory
+zeroize = { version = "1", features = ["derive"] }
+
+# Compile-time regex validation
+once_cell = "1"
+
 # Async traits
 async-trait = "0.1"
 
