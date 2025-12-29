@@ -10,10 +10,11 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use jsonwebtoken::{decode, DecodingKey, Validation};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 
 use crate::infrastructure::driven_adapters::config::AppConfig;
+use crate::infrastructure::driving_adapters::api_rest::AppState;
 use crate::shared::errors::ErrorResponse;
 
 /// JWT claims structure
@@ -114,14 +115,21 @@ where
                     message: "Invalid Authorization header format".to_string(),
                 })?;
 
-            // Decode and validate JWT
+            // Decode and validate JWT with explicit algorithm to prevent algorithm confusion attacks
+            let mut validation = Validation::new(Algorithm::HS256);
+            // Require exp claim to be present and valid
+            validation.validate_exp = true;
+            // Optionally set clock skew tolerance (default is 60 seconds)
+            validation.leeway = 60;
+
             let token_data = decode::<Claims>(
                 token,
                 &DecodingKey::from_secret(config.jwt.secret.as_bytes()),
-                &Validation::default(),
+                &validation,
             )
-            .map_err(|e| AuthError {
-                message: format!("Invalid token: {}", e),
+            .map_err(|_| AuthError {
+                // Don't expose internal token validation details
+                message: "Invalid or expired token".to_string(),
             })?;
 
             Ok(JwtAuth(token_data.claims.into()))
@@ -129,12 +137,12 @@ where
     }
 }
 
-/// Middleware layer that adds config to request extensions
+/// Middleware layer that adds config to request extensions for JWT validation
 pub async fn add_config_extension(
-    State(config): State<Arc<AppConfig>>,
+    State(state): State<AppState>,
     mut request: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> Response {
-    request.extensions_mut().insert(config);
+    request.extensions_mut().insert(state.config.clone());
     next.run(request).await
 }

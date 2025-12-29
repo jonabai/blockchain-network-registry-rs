@@ -1,11 +1,12 @@
 //! Blockchain Network Registry API - Main Entry Point
 
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
-use axum::Router;
+use axum::{middleware, Router};
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
-use tower_http::cors::{Any, CorsLayer};
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -16,6 +17,7 @@ use blockchain_network_registry::application::use_cases::networks::{
 use blockchain_network_registry::infrastructure::driven_adapters::config::AppConfig;
 use blockchain_network_registry::infrastructure::driven_adapters::network_repository::PostgresNetworkRepository;
 use blockchain_network_registry::infrastructure::driving_adapters::api_rest::handlers::networks;
+use blockchain_network_registry::infrastructure::driving_adapters::api_rest::middleware::auth::add_config_extension;
 use blockchain_network_registry::infrastructure::driving_adapters::api_rest::AppState;
 
 #[tokio::main]
@@ -67,16 +69,52 @@ async fn main() -> anyhow::Result<()> {
         delete_network_use_case,
     };
 
-    // Build router
+    // Configure rate limiting
+    let governor_conf = GovernorConfigBuilder::default()
+        .per_second(config.rate_limit.requests_per_second.into())
+        .burst_size(config.rate_limit.burst_size)
+        .finish()
+        .expect("Failed to build rate limiter config");
+
+    let rate_limit_layer = GovernorLayer {
+        config: Arc::new(governor_conf),
+    };
+    tracing::info!(
+        "Rate limiting configured: {} req/s, burst: {}",
+        config.rate_limit.requests_per_second,
+        config.rate_limit.burst_size
+    );
+
+    // Build router with secure CORS configuration
+    let cors = if config.server.allowed_origins.is_empty() {
+        // Development: restrictive default (localhost only)
+        tracing::warn!("No allowed_origins configured, defaulting to localhost only");
+        CorsLayer::new()
+            .allow_origin("http://localhost:3000".parse::<axum::http::HeaderValue>().expect("valid origin"))
+            .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::PUT, axum::http::Method::PATCH, axum::http::Method::DELETE])
+            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
+            .allow_credentials(true)
+    } else {
+        let origins: Vec<axum::http::HeaderValue> = config
+            .server
+            .allowed_origins
+            .iter()
+            .filter_map(|o| o.parse().ok())
+            .collect();
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::PUT, axum::http::Method::PATCH, axum::http::Method::DELETE])
+            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
+            .allow_credentials(true)
+    };
+
     let app = Router::new()
         .nest("/networks", networks::router())
+        // Add config to request extensions for JWT validation
+        .layer(middleware::from_fn_with_state(app_state.clone(), add_config_extension))
+        .layer(rate_limit_layer)
         .layer(TraceLayer::new_for_http())
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+        .layer(cors)
         .with_state(app_state);
 
     // Start server
@@ -84,7 +122,11 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&addr).await?;
     tracing::info!("Server listening on {}", addr);
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
